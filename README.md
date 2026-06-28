@@ -1,5 +1,5 @@
 # flysky_virtual_controller
-I needed to add button to my rc-controller (flysky fs-i6x) so helped by Claude I created this python script that run on Debian Trixie that let you add button from keyboard as it were from the controller.
+I needed to add buttons to my rc-controller (flysky fs-i6x) so helped by Claude I created this python script that run on Debian Trixie that let you add buttons from keyboard as they were from the controller.
 
 It works on Linux I don't know if it works on windows too, may be with some editing
 
