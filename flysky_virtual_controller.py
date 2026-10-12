@@ -6,7 +6,7 @@ Creates a virtual controller (uinput) combining:
   - Analog axes from the FlySky FS-i6X (USB HID dongle via pygame)
   - Buttons/switches from the keyboard (via evdev)
 
-Dipendenze:
+Dependencies:
     pip install pygame evdev
 
 Required permissions:
@@ -14,8 +14,11 @@ Required permissions:
 
 Usage:
     python3 flysky_virtual_controller.py [--flysky-id 0] [--keyboard /dev/input/eventX]
+    python3 flysky_virtual_controller.py [--profile N]   (skip menu, load profile by index)
     python3 flysky_virtual_controller.py --list-joysticks
     python3 flysky_virtual_controller.py --list-keyboards
+
+Profiles are loaded from controller_profiles.json in the same directory.
 """
 
 import argparse
@@ -24,56 +27,109 @@ import time
 import threading
 import signal
 import os
+import json
+from pathlib import Path
 
-# ── Key → virtual button mapping ──────────────────────────────────────
-# I nomi dei tasti sono quelli di evdev (ecodes.KEY_*).
-# "btn_index" is the button number in the virtual controller (0-11).
-
-KEY_TO_BUTTON = {
-    "KEY_SPACE":  0,   # arm / throttle cut
-    "KEY_R":      1,   # reset / recalibrate
-    "KEY_F":      2,   # flap up
-    "KEY_G":      3,   # flap down
-    "KEY_1":      4,   # channel 5 switch
-    "KEY_2":      5,   # channel 6 switch
-    "KEY_3":      6,   # channel 7 switch
-    "KEY_4":      7,   # channel 8 switch
-    "KEY_Q":      8,   # kill switch
-    "KEY_E":      9,   # flight mode A
-    "KEY_Z":      10,  # flight mode B
-    "KEY_X":      11,  # flight mode C
-}
-
-# ── FlySky → virtual controller axis remapping ───────────────────────────────
-# Format: physical_axis_index → virtual_axis_index
-# Edit here if the simulator expects a different axis order.
-#
-# Physical axes detected on FlySky FS-i6X with FeiYing dongle:
-#   0 = Roll       1 = Pitch
-#   2 = Throttle   4 = Yaw
-#
-# Standard order expected by simulators (Mode 2):
-#   virtual 0 = Roll, 1 = Pitch, 2 = Yaw, 3 = Throttle
-
-AXIS_REMAP = {
-    0: 0,   # Roll     physical 0 → virtual 0
-    1: 1,   # Pitch    physical 1 → virtual 1
-    4: 2,   # Yaw      physical 4 → virtual 2
-    2: 3,   # Throttle physical 2 → virtual 3
-    3: 4,   # knob physical 3 → virtual 4
-}
+# Suppress pygame AVX2 warning (cosmetic only, does not affect performance)
+os.environ.setdefault("PYGAME_DETECT_AVX2", "1")
 
 # ── Constants ───────────────────────────────────────────────────────────────
-AXIS_MIN   = -32767
-AXIS_MAX   =  32767
-AXIS_FUZZ  = 16
-AXIS_FLAT  = 128
-NUM_AXES   = 8
+AXIS_MIN    = -32767
+AXIS_MAX    =  32767
+AXIS_FUZZ   = 16
+AXIS_FLAT   = 128
+NUM_AXES    = 8
 
-DEVICE_NAME = "FlySky Virtual Controller"
-VENDOR_ID   = 0x1209  # pid.codes — generic ID for personal use
-PRODUCT_ID  = 0x0001
-VERSION     = 0x0001
+DEVICE_NAME  = "FlySky Virtual Controller"
+VENDOR_ID    = 0x1209   # pid.codes — generic ID for personal use
+PRODUCT_ID   = 0x0001
+VERSION      = 0x0001
+
+#PROFILES_FILE = Path(__file__).parent / "controller_profiles.json"
+PROFILES_FILE = Path(os.path.realpath(__file__)).parent / "controller_profiles.json"
+
+# ────────────────────────────────────────────────────────────────────────────
+def load_profiles() -> list:
+    """Load profiles from controller_profiles.json."""
+    if not PROFILES_FILE.exists():
+        print(f"[Profile] '{PROFILES_FILE}' not found — using built-in defaults.")
+        return []
+    with open(PROFILES_FILE, "r") as f:
+        data = json.load(f)
+    return data.get("profiles", [])
+
+
+def select_profile(profiles: list, preselect: int = None) -> dict:
+    """
+    Show a numbered text menu and return the chosen profile dict.
+    If preselect is given, skip the menu and return that index directly.
+    """
+    if not profiles:
+        print("[Profile] No profiles found — using script defaults.")
+        return {}
+
+    if preselect is not None:
+        if 0 <= preselect < len(profiles):
+            p = profiles[preselect]
+            print(f"[Profile] Auto-selected [{preselect}] {p['name']}")
+            return p
+        else:
+            print(f"[Profile] Index {preselect} out of range — showing menu.")
+
+    print()
+    W = 50  # inner width (between the two │)
+    def row(text=""):
+        return "│ " + text.ljust(W - 2) + " │"
+    print("┌" + "─" * W + "┐")
+    print(row("FlySky Virtual Controller - Profiles"))
+    print("├" + "─" * W + "┤")
+    for i, p in enumerate(profiles):
+        print(row(f"[{i}] {p['name']}"))
+        desc = p.get("description", "")
+        if desc:
+            print(row(f"     {desc}"))
+    print(row("[q] Quit"))
+    print("└" + "─" * W + "┘")
+    print()
+
+    while True:
+        try:
+            choice = input(f"Select profile [0-{len(profiles)-1}] or q to quit: ").strip().lower()
+            if choice == "q":
+                print("Exiting.")
+                sys.exit(0)
+            idx = int(choice)
+            if 0 <= idx < len(profiles):
+                p = profiles[idx]
+                print(f"[Profile] Loaded: {p['name']}")
+                if p.get("sdl_note"):
+                    print(f"[Profile] SDL note: {p['sdl_note']}")
+                print()
+                return p
+            else:
+                print(f"  Please enter a number between 0 and {len(profiles)-1}.")
+        except (ValueError, EOFError):
+            print("  Invalid input — please enter a number or q.")
+
+
+def apply_profile(profile: dict):
+    """
+    Return (axis_remap, key_to_button) from a profile dict.
+    JSON keys are strings so we convert axis keys to int.
+    """
+    if not profile:
+        # Fall back to built-in defaults
+        axis_remap = {0: 0, 1: 1, 4: 2, 2: 3, 3: 4}
+        key_to_button = {
+            "KEY_SPACE": 0, "KEY_R": 1, "KEY_F": 2,  "KEY_G": 3,
+            "KEY_1":     4, "KEY_2": 5, "KEY_3": 6,  "KEY_4": 7,
+            "KEY_Q":     8, "KEY_E": 9, "KEY_Z": 10, "KEY_X": 11,
+        }
+        return axis_remap, key_to_button
+
+    axis_remap    = {int(k): v for k, v in profile.get("axis_remap", {}).items()}
+    key_to_button = profile.get("key_to_button", {})
+    return axis_remap, key_to_button
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -87,7 +143,7 @@ def list_joysticks():
     for i in range(count):
         j = pygame.joystick.Joystick(i)
         j.init()
-        print(f"  [{i}] {j.get_name()}  —  {j.get_numaxes()} assi, {j.get_numbuttons()} bottoni")
+        print(f"  [{i}] {j.get_name()}  —  {j.get_numaxes()} axes, {j.get_numbuttons()} buttons")
     pygame.quit()
 
 
@@ -166,13 +222,14 @@ class VirtualController:
 
 # ────────────────────────────────────────────────────────────────────────────
 class FlySkyReader(threading.Thread):
-    """Reads axes from the FlySky via pygame and remaps them according to AXIS_REMAP."""
+    """Reads axes from the FlySky via pygame and remaps them according to axis_remap."""
 
-    def __init__(self, joystick_index: int, virtual: VirtualController):
+    def __init__(self, joystick_index: int, virtual: VirtualController, axis_remap: dict):
         super().__init__(daemon=True)
-        self._js_index = joystick_index
-        self._virtual  = virtual
-        self._running  = True
+        self._js_index  = joystick_index
+        self._virtual   = virtual
+        self._axis_remap = axis_remap
+        self._running   = True
 
     def run(self):
         import pygame
@@ -191,12 +248,12 @@ class FlySkyReader(threading.Thread):
         js.init()
         num_axes = js.get_numaxes()
         print(f"[FlySky] Connected: '{js.get_name()}' — {num_axes} physical axes")
-        print(f"[FlySky] Active axis remap: {AXIS_REMAP}")
+        print(f"[FlySky] Active axis remap: {self._axis_remap}")
 
         clock = pygame.time.Clock()
         while self._running:
             pygame.event.pump()
-            for src, dst in AXIS_REMAP.items():
+            for src, dst in self._axis_remap.items():
                 if src < num_axes:
                     val = js.get_axis(src)  # range [-1.0, 1.0]
                     self._virtual.set_axis(dst, val)
@@ -213,15 +270,16 @@ class FlySkyReader(threading.Thread):
 class KeyboardReader(threading.Thread):
     """
     Reads keys from the keyboard via evdev with exclusive grab.
-    - Keys mapped in KEY_TO_BUTTON → buttons on the virtual controller
+    - Keys mapped in key_to_button → buttons on the virtual controller
     - All other keys → re-injected via uinput passthrough (Ctrl+C works normally)
     """
 
-    def __init__(self, keyboard_path: str, virtual: VirtualController):
+    def __init__(self, keyboard_path: str, virtual: VirtualController, key_to_button: dict):
         super().__init__(daemon=True)
-        self._path    = keyboard_path
-        self._virtual = virtual
-        self._running = True
+        self._path          = keyboard_path
+        self._virtual       = virtual
+        self._key_to_button = key_to_button
+        self._running       = True
 
     def run(self):
         from evdev import InputDevice, UInput, ecodes
@@ -236,7 +294,7 @@ class KeyboardReader(threading.Thread):
 
         from evdev import ecodes as e
         key_map = {}
-        for key_name, btn_idx in KEY_TO_BUTTON.items():
+        for key_name, btn_idx in self._key_to_button.items():
             code = getattr(e, key_name, None)
             if code is not None:
                 key_map[code] = btn_idx
@@ -275,7 +333,7 @@ class KeyboardReader(threading.Thread):
                             self._virtual.set_button(btn_idx, pressed)
                             self._virtual.sync()
                             action = "▼" if pressed else "▲"
-                            print(f"[Keyboard] {action} btn{btn_idx} (tasto code={event.code})")
+                            print(f"[Keyboard] {action} btn{btn_idx} (key code={event.code})")
                     else:
                         # Unmapped key → passthrough to system
                         if passthrough is not None:
@@ -321,10 +379,14 @@ def main():
                         help="FlySky joystick index (default: 0).")
     parser.add_argument("--keyboard", type=str, default=None,
                         help="Keyboard device path, e.g. /dev/input/event5.")
+    parser.add_argument("--profile", type=int, default=None,
+                        help="Profile index to load directly, skipping the menu.")
     parser.add_argument("--list-joysticks", action="store_true",
                         help="List available joysticks and exit.")
     parser.add_argument("--list-keyboards", action="store_true",
                         help="List available keyboards and exit.")
+    parser.add_argument("--list-profiles", action="store_true",
+                        help="List available profiles and exit.")
     args = parser.parse_args()
 
     if args.list_joysticks:
@@ -334,6 +396,20 @@ def main():
         list_keyboards()
         return
 
+    # Load profiles and show menu
+    profiles = load_profiles()
+
+    if args.list_profiles:
+        if not profiles:
+            print("No profiles found.")
+        for i, p in enumerate(profiles):
+            print(f"  [{i}] {p['name']} — {p.get('description', '')}")
+        return
+
+    profile       = select_profile(profiles, preselect=args.profile)
+    axis_remap, key_to_button = apply_profile(profile)
+
+    # Keyboard detection
     kbd_path = args.keyboard
     if kbd_path is None:
         kbd_path = auto_detect_keyboard()
@@ -344,8 +420,8 @@ def main():
             sys.exit(1)
 
     virtual         = VirtualController()
-    flysky_thread   = FlySkyReader(args.flysky_id, virtual)
-    keyboard_thread = KeyboardReader(kbd_path, virtual)
+    flysky_thread   = FlySkyReader(args.flysky_id, virtual, axis_remap)
+    keyboard_thread = KeyboardReader(kbd_path, virtual, key_to_button)
 
     flysky_thread.start()
     keyboard_thread.start()
@@ -364,16 +440,18 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
+    profile_name = profile.get("name", "built-in defaults") if profile else "built-in defaults"
     print("\n" + "─"*55)
     print(f"  Active virtual controller: '{DEVICE_NAME}'")
-    print(f"  Axes:    from FlySky (joystick #{args.flysky_id})")
-    print(f"  Buttons: from keyboard ({kbd_path})")
-    print(f"  Active key map:")
-    for k, v in KEY_TO_BUTTON.items():
-        print(f"    {k:<18} → btn{v}")
+    print(f"  Profile:  {profile_name}")
+    print(f"  Axes:     from FlySky (joystick #{args.flysky_id})")
+    print(f"  Buttons:  from keyboard ({kbd_path})")
     print(f"  Axis remapping:")
-    for src, dst in AXIS_REMAP.items():
+    for src, dst in axis_remap.items():
         print(f"    physical axis {src} → virtual {dst}")
+    print(f"  Key map:")
+    for k, v in key_to_button.items():
+        print(f"    {k:<18} → btn{v}")
     print("─"*55)
     print("  Press Ctrl+C to exit.\n")
 
