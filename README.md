@@ -1,13 +1,3 @@
-# flysky_virtual_controller
-I needed to add buttons to my rc-controller (flysky fs-i6x) so helped by Claude I created this python script that run on Debian Trixie that let you add buttons from keyboard as they were from the controller.
-
-It works on Linux I don't know if it works on windows too, may be with some editing
-
-Creates a virtual controller (uinput) combining:
-  - Analog axes from the FlySky FS-i6X (or other rc.controller connected by USB HID dongle via pygame)
-  - Buttons/switches from the keyboard (via evdev)
-    
-    
 # How to use flysky_virtual_controller.py with a different controller
 
 This guide explains how to adapt the script to any RC controller connected
@@ -40,15 +30,6 @@ source/
 └── controller_profiles.json
 ```
 
-If you launch the script via a symlink (e.g. from a `bin/` folder in your
-PATH), the script automatically resolves the symlink and looks for
-`controller_profiles.json` next to the **real** source file, not the link.
-
-```bash
-# example symlink setup
-ln -s /path/to/source/flysky_virtual_controller.py ~/bin/flysky
-```
-
 ---
 
 ## 3. Find your joystick index
@@ -56,7 +37,7 @@ ln -s /path/to/source/flysky_virtual_controller.py ~/bin/flysky
 Plug in your controller and run:
 
 ```bash
-flysky --list-joysticks
+python3 flysky_virtual_controller.py --list-joysticks
 ```
 
 Note the index number `[N]` next to your controller name.
@@ -66,7 +47,7 @@ Note the index number `[N]` next to your controller name.
 ## 4. Find your keyboard device
 
 ```bash
-flysky --list-keyboards
+python3 flysky_virtual_controller.py --list-keyboards
 ```
 
 This lists all devices that send key events. To confirm which one sends
@@ -190,7 +171,7 @@ SDL will give both devices the same name.
 ## 8. Run the script
 
 ```bash
-flysky --flysky-id N --keyboard /dev/input/eventX
+python3 flysky_virtual_controller.py --flysky-id N --keyboard /dev/input/eventX
 ```
 
 Replace `N` with the joystick index from step 3 and `eventX` with the
@@ -217,13 +198,13 @@ Select profile [0-2] or q to quit: _
 To skip the menu and load a profile directly (useful for autostart):
 
 ```bash
-flysky --profile 0 --flysky-id N --keyboard /dev/input/eventX
+python3 flysky_virtual_controller.py --profile 0 --flysky-id N --keyboard /dev/input/eventX
 ```
 
 To list available profiles without starting the script:
 
 ```bash
-flysky --list-profiles
+python3 flysky_virtual_controller.py --list-profiles
 ```
 
 Press **Ctrl+C** in the terminal to stop the script and release the
@@ -292,14 +273,6 @@ You can store this string in the profile's `sdl_note` field for reference.
   is running, not in the game window. The keyboard grab is exclusive only
   for keys listed in `key_to_button`; Ctrl+C is passed through normally.
 
-**controller_profiles.json not found when launched via symlink**
-: The script uses `os.path.realpath(__file__)` to resolve the symlink and
-  always looks for the JSON file next to the real source file. Make sure
-  both files are in the same directory.
-
 **`uinput` module not loaded**
 : Run `sudo modprobe uinput`. On Debian/Ubuntu it is included in the
-  default kernel but may not be loaded automatically.    
-    
-    
-
+  default kernel but may not be loaded automatically.

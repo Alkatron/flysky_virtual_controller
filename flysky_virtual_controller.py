@@ -31,7 +31,7 @@ import json
 from pathlib import Path
 
 # Suppress pygame AVX2 warning (cosmetic only, does not affect performance)
-os.environ.setdefault("PYGAME_DETECT_AVX2", "1")
+#os.environ.setdefault("PYGAME_DETECT_AVX2", "1")
 
 # ── Constants ───────────────────────────────────────────────────────────────
 AXIS_MIN    = -32767

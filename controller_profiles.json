@@ -26,6 +26,7 @@
       },
       "sdl_note": "Steam launch options: SDL_GAMECONTROLLER_IGNORE_DEVICES=0x1781/0x0e56 SDL_GAMECONTROLLERCONFIG=\"0300a593091200000100000001000000,FlySky Virtual Controller,platform:Linux,leftx:a0,lefty:a1,rightx:a2,righty:a3,lefttrigger:a6,righttrigger:a7,a:b0,b:b1,x:b2,y:b3,\" %command%"
     },
+
     {
       "name": "FPV Kamikaze Drone Simulator",
       "description": "Kamikaze — SDL GameController mode, Mode 2",
